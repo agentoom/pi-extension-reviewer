@@ -1,0 +1,22 @@
+{
+  "name": "pi-reviewer",
+  "version": "1.0.0",
+  "description": "Post-task multi-area code review extension for pi — 7 specialised review areas (general, security, code quality, UI/UX, testing, performance, scope) with a checkbox picker UI",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
