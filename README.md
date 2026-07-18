@@ -1,13 +1,13 @@
-# pi-reviewer
+# @agentoom/pi-reviewer
 
-Post-task multi-area code review extension for [pi](https://pi.dev).
+Post-task multi-area code review extension for [pi](https://pi.dev) by [agentoom.com](https://agentoom.com).
 
 After every task, pi-reviewer prompts you to run a structured critique across 7 specialised areas — or you can call `/review` anytime.
 
 ## Install
 
 ```bash
-pi install git:github.com:USERNAME/pi-reviewer@v1.0.0
+pi install npm:@agentoom/pi-reviewer
 ```
 
 ## Usage
@@ -60,6 +60,11 @@ pi-reviewer/
 ├── index.ts          # Extension entry point
 └── README.md
 ```
+
+## Links
+
+- [agentoom.com](https://agentoom.com)
+- [npm: @agentoom/pi-reviewer](https://www.npmjs.com/package/@agentoom/pi-reviewer)
 
 Run against a local path:
 
