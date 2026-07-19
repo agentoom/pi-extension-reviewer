@@ -16,6 +16,9 @@
  *   scope        – Did the agent change more than it should have?
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type {
@@ -25,6 +28,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
 	BorderedLoader,
+	CONFIG_DIR_NAME,
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
@@ -239,6 +243,30 @@ Structure your response as:
 ];
 
 // ---------------------------------------------------------------------------
+// Review config (project-level and session-level disable)
+// ---------------------------------------------------------------------------
+
+interface ReviewConfig {
+	autoReview: boolean;
+}
+
+function readProjectReviewConfig(ctx: ExtensionContext): ReviewConfig | null {
+	try {
+		const configPath = join(ctx.cwd, CONFIG_DIR_NAME, "review-config.json");
+		if (!existsSync(configPath)) return null;
+		const raw = readFileSync(configPath, "utf-8");
+		return JSON.parse(raw) as ReviewConfig;
+	} catch {
+		return null;
+	}
+}
+
+function isReviewDisabledByEnv(): boolean {
+	const val = process.env["REVIEWER_DISABLE_SESSION"];
+	return val === "true" || val === "1";
+}
+
+// ---------------------------------------------------------------------------
 // Persistent state
 // ---------------------------------------------------------------------------
 
@@ -450,8 +478,21 @@ export default function piReviewer(pi: ExtensionAPI) {
 		}
 	}
 
+	function isAutoReviewActive(ctx: ExtensionContext): boolean {
+		// Session-level env var takes highest priority
+		if (isReviewDisabledByEnv()) return false;
+
+		// Project-level config
+		const projectCfg = readProjectReviewConfig(ctx);
+		if (projectCfg && projectCfg.autoReview === false) return false;
+
+		return true;
+	}
+
 	function updateStatus(ctx: ExtensionContext) {
-		if (autoOffer) {
+		if (!isAutoReviewActive(ctx)) {
+			ctx.ui.setStatus("pi-reviewer", undefined);
+		} else if (autoOffer) {
 			ctx.ui.setStatus(
 				"pi-reviewer",
 				ctx.ui.theme.fg("accent", "🔍 auto-review"),
@@ -459,6 +500,151 @@ export default function piReviewer(pi: ExtensionAPI) {
 		} else {
 			ctx.ui.setStatus("pi-reviewer", undefined);
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Issue detection and apply-findings logic
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Check whether the combined review output contains actionable issues.
+	 * Looks for "### ❌ Issues found" / "### ❌" / "### ⚠️" sections with bullet points.
+	 */
+	function reviewHasIssues(combinedOutput: string): boolean {
+		// Match ❌ sections
+		const issueSections = combinedOutput.match(/### ❌[^\n]*\n\n([\s\S]*?)(?=### |$)/g);
+		if (issueSections) {
+			for (const section of issueSections) {
+				const body = section.replace(/### ❌[^\n]*\n\n/, "").trim();
+				if (
+					body.length > 0 &&
+					!/^(none|no issues|n\/a)\s*$/i.test(body) &&
+					/-\s/.test(body)
+				) {
+					return true;
+				}
+			}
+		}
+
+		// Match ⚠️ sections (warnings)
+		const warningSections = combinedOutput.match(/### ⚠️[^\n]*\n\n([\s\S]*?)(?=### |$)/g);
+		if (warningSections) {
+			for (const section of warningSections) {
+				const body = section.replace(/### ⚠️[^\n]*\n\n/, "").trim();
+				if (
+					body.length > 0 &&
+					!/^(none|no (issues|concerns)|n\/a)\s*$/i.test(body) &&
+					/-\s/.test(body)
+				) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Run the LLM to apply review findings to the codebase.
+	 */
+	async function applyFindings(
+		reviewText: string,
+		ctx: ExtensionContext,
+	): Promise<string | null> {
+		if (!ctx.model) {
+			ctx.ui.notify("No model selected — cannot apply findings", "error");
+			return null;
+		}
+
+		const messages = collectConversation(ctx.sessionManager.getBranch());
+		const llmMessages = convertToLlm(messages);
+		const conversationText = serializeConversation(llmMessages);
+
+		const systemPrompt = `You are applying code review findings to fix issues discovered during a review.
+
+Below is the review report and the conversation that led to it. Your job is to:
+
+1. Read every ❌ Issues found and ⚠️ section in the review.
+2. For each concrete, actionable item, edit the relevant files to fix it.
+3. Skip items marked as "None", "N/A", or that are purely advisory.
+4. Run tests if available to verify your fixes don't break anything.
+5. Use the project's existing conventions and code style.
+
+After applying fixes, output:
+
+## Fixes Applied
+- \`file.ts:42\` — what was changed and why
+
+## Issues Deferred (if any)
+- \`file.ts:100\` — why it wasn't changed
+
+## Verification
+- Test results or confirmation that changes are safe.`;
+
+		return await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+			const loader = new BorderedLoader(
+				tui,
+				theme,
+				"Applying review findings...",
+			);
+			loader.onAbort = () => done(null);
+
+			const doApply = async () => {
+				try {
+					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(
+						ctx.model!,
+					);
+					if (!auth.ok || !auth.apiKey) {
+						done(null);
+						return;
+					}
+
+					const response = await complete(
+						ctx.model!,
+						{
+							systemPrompt,
+							messages: [
+								{
+									role: "user",
+									content: [
+										{
+											type: "text",
+											text: `## Original conversation\n\n${conversationText}\n\n## Review findings to apply\n\n${reviewText}\n\nPlease apply the actionable fixes from the review above.`,
+										},
+									],
+									timestamp: Date.now(),
+								},
+							],
+						},
+						{
+							apiKey: auth.apiKey,
+							headers: auth.headers,
+							env: auth.env,
+							signal: loader.signal,
+						},
+					);
+
+					if (response.stopReason === "aborted") {
+						done(null);
+						return;
+					}
+
+					const text = response.content
+						.filter(
+							(c): c is { type: "text"; text: string } =>
+								c.type === "text",
+						)
+						.map((c) => c.text)
+						.join("\n");
+					done(text);
+				} catch {
+					done(null);
+				}
+			};
+
+			doApply();
+			return loader;
+		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -577,14 +763,37 @@ export default function piReviewer(pi: ExtensionAPI) {
 			.map((r) => r.text)
 			.join("\n\n---\n\n");
 
+		// Detect whether actionable issues were found
+		const hasIssues = reviewHasIssues(combined);
+
 		if (editorMode) {
 			ctx.ui.setEditorText(combined);
 			ctx.ui.notify(
 				`Review complete — ${results.length} area(s) loaded into editor`,
 				"info",
 			);
+			// In editor mode, still offer to apply if issues found
+			if (hasIssues) {
+				const applyChoice = await ctx.ui.select(
+					"Issues found in review — apply findings?",
+					["Apply fixes now", "Skip — I'll handle it manually"],
+				);
+				if (applyChoice === "Apply fixes now") {
+					const fixResult = await applyFindings(combined, ctx);
+					if (fixResult) {
+						pi.sendMessage(
+							{
+								customType: "pi-reviewer-fixes",
+								content: fixResult,
+								display: true,
+							},
+							{ triggerTurn: false },
+						);
+					}
+				}
+			}
 		} else {
-			// Send as a custom displayed message
+			// Send review as a custom displayed message
 			pi.sendMessage(
 				{
 					customType: "pi-reviewer-report",
@@ -593,6 +802,33 @@ export default function piReviewer(pi: ExtensionAPI) {
 				},
 				{ triggerTurn: false },
 			);
+
+			if (hasIssues) {
+				const applyChoice = await ctx.ui.select(
+					"Issues found in review — apply findings?",
+					["Apply fixes now", "Skip"],
+				);
+				if (applyChoice === "Apply fixes now") {
+					const fixResult = await applyFindings(combined, ctx);
+					if (fixResult) {
+						pi.sendMessage(
+							{
+								customType: "pi-reviewer-fixes",
+								content: fixResult,
+								display: true,
+							},
+							{ triggerTurn: false },
+						);
+					}
+				} else {
+					ctx.ui.notify(
+						`Review complete — ${results.length} area(s), issues found but skipped`,
+						"info",
+					);
+					return;
+				}
+			}
+
 			ctx.ui.notify(
 				`Review complete — ${results.length} area(s)`,
 				"info",
@@ -676,6 +912,62 @@ export default function piReviewer(pi: ExtensionAPI) {
 	});
 
 	// -----------------------------------------------------------------------
+	// /review-disable-project — disable auto-review for the current project
+	// -----------------------------------------------------------------------
+
+	pi.registerCommand("review-disable-project", {
+		description: "Disable auto-review for this project (writes .pi/review-config.json)",
+		handler: async (_args, ctx) => {
+			const { writeFileSync } = await import("node:fs");
+			const { mkdirSync } = await import("node:fs");
+			const configDir = join(ctx.cwd, CONFIG_DIR_NAME);
+			try {
+				if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+				writeFileSync(
+					join(configDir, "review-config.json"),
+					JSON.stringify({ autoReview: false }, null, 2) + "\n",
+					"utf-8",
+				);
+				updateStatus(ctx);
+				ctx.ui.notify(
+					"Auto-review DISABLED for this project. Use /review-enable-project to re-enable or set REVIEWER_DISABLE_SESSION=1 for session-only.",
+					"info",
+				);
+			} catch (err: any) {
+				ctx.ui.notify(`Failed: ${err.message}`, "error");
+			}
+		},
+	});
+
+	// -----------------------------------------------------------------------
+	// /review-enable-project — re-enable auto-review for the current project
+	// -----------------------------------------------------------------------
+
+	pi.registerCommand("review-enable-project", {
+		description: "Re-enable auto-review for this project (updates .pi/review-config.json)",
+		handler: async (_args, ctx) => {
+			const { writeFileSync } = await import("node:fs");
+			const { mkdirSync } = await import("node:fs");
+			const configDir = join(ctx.cwd, CONFIG_DIR_NAME);
+			try {
+				if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+				writeFileSync(
+					join(configDir, "review-config.json"),
+					JSON.stringify({ autoReview: true }, null, 2) + "\n",
+					"utf-8",
+				);
+				updateStatus(ctx);
+				ctx.ui.notify(
+					"Auto-review ENABLED for this project.",
+					"info",
+				);
+			} catch (err: any) {
+				ctx.ui.notify(`Failed: ${err.message}`, "error");
+			}
+		},
+	});
+
+	// -----------------------------------------------------------------------
 	// Auto‑offer after agent settles
 	// -----------------------------------------------------------------------
 
@@ -685,6 +977,9 @@ export default function piReviewer(pi: ExtensionAPI) {
 		offeredThisTask = true;
 
 		if (!autoOffer) return;
+
+		// Check project-level and session-level disable
+		if (!isAutoReviewActive(ctx)) return;
 
 		const choice = await ctx.ui.select("Task complete — run a code review?", [
 			"Review (all 7 areas)",

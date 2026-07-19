@@ -18,6 +18,17 @@ pi install npm:@agentoom/pi-reviewer
 |---------|-------------|
 | `/review` | Open the review area picker and run selected reviews |
 | `/review-toggle` | Toggle the auto‑offer prompt on/after each task |
+| `/review-disable-project` | Disable auto-review for the current project (writes `.pi/review-config.json`) |
+| `/review-enable-project` | Re-enable auto-review for the current project |
+
+### Apply Review Findings
+
+After the review completes, pi-reviewer scans the results for actionable issues (sections marked with ❌ or ⚠️ containing bullet points). If issues are found, you'll be prompted:
+
+- **Apply fixes now** — the LLM reads the review findings, edits the affected files, and reports what was changed.
+- **Skip** — the review is saved but no fixes are applied.
+
+If the review found no issues, the prompt is skipped and the review is simply displayed.
 
 ### Auto‑offer
 
@@ -31,6 +42,28 @@ By default, pi-reviewer prompts you after every task completes. Choose:
 When auto‑offer is disabled, `🔍 auto-review` disappears from the footer, and pi-reviewer stays silent until you run `/review`.
 
 Toggle it back on with `/review-toggle`.
+
+### Disabling Auto-Review
+
+#### For the current project (persistent)
+
+Run `/review-disable-project` to write `autoReview: false` to `.pi/review-config.json`. The extension will skip auto-offering after each task. Use `/review-enable-project` to undo.
+
+You can also create `.pi/review-config.json` manually:
+
+```json
+{ "autoReview": false }
+```
+
+#### For the current session only
+
+Set an environment variable before starting pi:
+
+```bash
+REVIEWER_DISABLE_SESSION=true pi
+```
+
+This suppresses the auto-review prompt for that session only — other pi sessions (without the env var) are unaffected. The env var takes priority over the project config.
 
 ### Review Areas
 
