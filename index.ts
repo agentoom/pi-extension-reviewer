@@ -490,9 +490,10 @@ export default function piReviewer(pi: ExtensionAPI) {
 		(entry, _opts, theme) => {
 			const data = entry.data ?? { content: "", timestamp: Date.now() };
 			const header = theme.fg("accent", theme.bold("📋 Code Review Report"));
-			return new Box(1, 1, (text) => theme.bg("customMessageBg", text))
-				.addChild(new Text(header, 0, 0))
-				.addChild(new Text(data.content, 0, 1));
+			const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+			box.addChild(new Text(header, 0, 0));
+			box.addChild(new Text(data.content, 0, 1));
+			return box;
 		},
 	);
 
@@ -501,9 +502,10 @@ export default function piReviewer(pi: ExtensionAPI) {
 		(entry, _opts, theme) => {
 			const data = entry.data ?? { content: "", timestamp: Date.now() };
 			const header = theme.fg("success", theme.bold("🔧 Fixes Applied"));
-			return new Box(1, 1, (text) => theme.bg("customMessageBg", text))
-				.addChild(new Text(header, 0, 0))
-				.addChild(new Text(data.content, 0, 1));
+			const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+			box.addChild(new Text(header, 0, 0));
+			box.addChild(new Text(data.content, 0, 1));
+			return box;
 		},
 	);
 
