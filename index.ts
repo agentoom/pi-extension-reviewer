@@ -323,6 +323,28 @@ function collectConversation(branch: SessionEntry[]): AgentMessage[] {
 		.filter((m): m is AgentMessage => m !== undefined);
 }
 
+/**
+ * Collect only the last user-assistant exchange (last prompt to end of branch).
+ * Default scope for reviews — avoids reviewing the entire session.
+ */
+function collectLastTurn(branch: SessionEntry[]): AgentMessage[] {
+	let lastUserIndex = -1;
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type === "message" && entry.message.role === "user") {
+			lastUserIndex = i;
+			break;
+		}
+	}
+	if (lastUserIndex < 0) {
+		return [];
+	}
+	return branch
+		.slice(lastUserIndex)
+		.map(entryToMessage)
+		.filter((m): m is AgentMessage => m !== undefined);
+}
+
 // ---------------------------------------------------------------------------
 // Multi‑select checkbox component
 // ---------------------------------------------------------------------------
@@ -654,7 +676,7 @@ After applying fixes, output:
 	async function runReview(
 		areaIds: Set<string>,
 		ctx: ExtensionContext,
-		editorMode: boolean,
+		scope: "last" | "full" = "last",
 	) {
 		const areas = REVIEW_AREAS.filter((a) => areaIds.has(a.id));
 		if (areas.length === 0) {
@@ -667,8 +689,11 @@ After applying fixes, output:
 			return;
 		}
 
-		// Collect conversation context
-		const messages = collectConversation(ctx.sessionManager.getBranch());
+		// Collect conversation context (based on scope)
+		const branch = ctx.sessionManager.getBranch();
+		const messages = scope === "last"
+			? collectLastTurn(branch)
+			: collectConversation(branch);
 		if (messages.length === 0) {
 			ctx.ui.notify("No conversation to review", "error");
 			return;
@@ -766,74 +791,39 @@ After applying fixes, output:
 		// Detect whether actionable issues were found
 		const hasIssues = reviewHasIssues(combined);
 
-		if (editorMode) {
-			ctx.ui.setEditorText(combined);
-			ctx.ui.notify(
-				`Review complete — ${results.length} area(s) loaded into editor`,
-				"info",
-			);
-			// In editor mode, still offer to apply if issues found
-			if (hasIssues) {
-				const applyChoice = await ctx.ui.select(
-					"Issues found in review — apply findings?",
-					["Apply fixes now", "Skip — I'll handle it manually"],
-				);
-				if (applyChoice === "Apply fixes now") {
-					const fixResult = await applyFindings(combined, ctx);
-					if (fixResult) {
-						pi.sendMessage(
-							{
-								customType: "pi-reviewer-fixes",
-								content: fixResult,
-								display: true,
-							},
-							{ triggerTurn: false },
-						);
-					}
-				}
-			}
-		} else {
-			// Send review as a custom displayed message
-			pi.sendMessage(
-				{
-					customType: "pi-reviewer-report",
-					content: combined,
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
+		// Always show review results in editor to avoid polluting LLM
+		// conversation context. (Using pi.sendMessage would inject review
+		// content into the agent's context and confuse subsequent prompts.)
+		ctx.ui.setEditorText(combined);
 
-			if (hasIssues) {
-				const applyChoice = await ctx.ui.select(
-					"Issues found in review — apply findings?",
-					["Apply fixes now", "Skip"],
-				);
-				if (applyChoice === "Apply fixes now") {
-					const fixResult = await applyFindings(combined, ctx);
-					if (fixResult) {
-						pi.sendMessage(
-							{
-								customType: "pi-reviewer-fixes",
-								content: fixResult,
-								display: true,
-							},
-							{ triggerTurn: false },
-						);
-					}
-				} else {
+		if (hasIssues) {
+			const applyChoice = await ctx.ui.select(
+				"Issues found in review — apply findings?",
+				["Apply fixes now", "Skip"],
+			);
+			if (applyChoice === "Apply fixes now") {
+				const fixResult = await applyFindings(combined, ctx);
+				if (fixResult) {
+					ctx.ui.setEditorText(fixResult);
 					ctx.ui.notify(
-						`Review complete — ${results.length} area(s), issues found but skipped`,
+						`✅ Review complete — ${results.length} area(s), fixes applied. Results in editor.`,
 						"info",
 					);
 					return;
 				}
+			} else {
+				ctx.ui.notify(
+					`Review complete — ${results.length} area(s), issues found but skipped. Results in editor.`,
+					"info",
+				);
+				return;
 			}
-
-			ctx.ui.notify(
-				`Review complete — ${results.length} area(s)`,
-				"info",
-			);
 		}
+
+		ctx.ui.notify(
+			`✅ Review complete — ${results.length} area(s). Results in editor.`,
+			"info",
+		);
 	}
 
 	// -----------------------------------------------------------------------
@@ -842,12 +832,22 @@ After applying fixes, output:
 
 	async function pickAndReview(
 		ctx: ExtensionContext,
-		editorMode: boolean,
 	): Promise<void> {
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("/review requires interactive mode", "error");
 			return;
 		}
+
+		// Ask about review scope — default to last prompt only
+		const scopeChoice = await ctx.ui.select("Review scope?", [
+			"Last prompt only",
+			"Entire session",
+		]);
+		if (scopeChoice === undefined) {
+			ctx.ui.notify("Review cancelled", "info");
+			return;
+		}
+		const scope: "last" | "full" = scopeChoice === "Entire session" ? "full" : "last";
 
 		const selected = await ctx.ui.custom<Set<string> | null>(
 			(tui, theme, _kb, done) => {
@@ -878,7 +878,7 @@ After applying fixes, output:
 			return;
 		}
 
-		await runReview(selected, ctx, editorMode);
+		await runReview(selected, ctx, scope);
 	}
 
 	// -----------------------------------------------------------------------
@@ -888,7 +888,7 @@ After applying fixes, output:
 	pi.registerCommand("review", {
 		description: "Run a multi-area code review on the just-completed task",
 		handler: async (_args, ctx) => {
-			await pickAndReview(ctx, false);
+			await pickAndReview(ctx);
 		},
 	});
 
@@ -1002,10 +1002,16 @@ After applying fixes, output:
 		}
 
 		if (choice === "Review (all 7 areas)") {
+			const scopeChoice = await ctx.ui.select("Review scope?", [
+				"Last prompt only",
+				"Entire session",
+			]);
+			if (scopeChoice === undefined) return;
+			const scope: "last" | "full" = scopeChoice === "Entire session" ? "full" : "last";
 			const allIds = new Set(REVIEW_AREAS.map((a) => a.id));
-			await runReview(allIds, ctx, false);
+			await runReview(allIds, ctx, scope);
 		} else {
-			await pickAndReview(ctx, false);
+			await pickAndReview(ctx);
 		}
 	});
 

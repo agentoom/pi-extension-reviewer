@@ -4,6 +4,8 @@ Post-task multi-area code review extension for [pi](https://pi.dev) by [agentoom
 
 After every task, pi-reviewer prompts you to run a structured critique across 7 specialised areas — or you can call `/review` anytime.
 
+> **v1.2.0** — Review scope now defaults to the **last prompt only** (not the entire session), and results are displayed in the editor to avoid confusing subsequent agent prompts.
+
 ## Install
 
 ```bash
@@ -21,21 +23,30 @@ pi install npm:@agentoom/pi-reviewer
 | `/review-disable-project` | Disable auto-review for the current project (writes `.pi/review-config.json`) |
 | `/review-enable-project` | Re-enable auto-review for the current project |
 
+### Review Scope
+
+Before each review, you're asked to choose the scope:
+
+- **Last prompt only** (default) — only the most recent user prompt and the agent's response are reviewed. This is the recommended default and avoids reviewing irrelevant context from earlier in the session.
+- **Entire session** — the full conversation from the session (or from the last compaction point) is reviewed.
+
 ### Apply Review Findings
 
-After the review completes, pi-reviewer scans the results for actionable issues (sections marked with ❌ or ⚠️ containing bullet points). If issues are found, you'll be prompted:
+After the review completes, pi-reviewer scans the results for actionable issues (sections marked with ❌ or ⚠️ containing bullet points). Results are loaded into the editor panel (not injected into the conversation) to avoid confusing the agent on subsequent prompts.
 
-- **Apply fixes now** — the LLM reads the review findings, edits the affected files, and reports what was changed.
-- **Skip** — the review is saved but no fixes are applied.
+If issues are found, you'll be prompted:
 
-If the review found no issues, the prompt is skipped and the review is simply displayed.
+- **Apply fixes now** — the LLM reads the review findings, edits the affected files, and reports what was changed. Fix results are also shown in the editor.
+- **Skip** — the review results stay in the editor but no fixes are applied.
+
+If the review found no issues, the prompt is skipped and results are placed in the editor.
 
 ### Auto‑offer
 
 By default, pi-reviewer prompts you after every task completes. Choose:
 
-- **Review (all 7 areas)** — run every area immediately
-- **Pick which areas to review** — open the checkbox picker
+- **Review (all 7 areas)** — you'll be asked about review scope, then all areas run
+- **Pick which areas to review** — you'll be asked about review scope, then the checkbox picker opens
 - **Disable auto-offer** — switch to manual mode permanently
 - **Skip** — dismiss for this task only
 
