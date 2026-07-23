@@ -4,7 +4,7 @@ Post-task multi-area code review extension for [pi](https://pi.dev) by [agentoom
 
 After every task, pi-reviewer prompts you to run a structured critique across 7 specialised areas — or you can call `/review` anytime.
 
-> **v1.2.1** — Review results and fixes now render directly in the chat transcript (via `pi.appendEntry` entry renderers) so you can read them inline, yet they stay invisible to the LLM on subsequent prompts. Review scope defaults to the **last prompt only**.
+> **v1.2.2** — Review results and fixes now render directly in the chat transcript (via `pi.appendEntry` entry renderers) so you can read them inline, yet they stay invisible to the LLM on subsequent prompts. Review scope defaults to the **last prompt only**.
 
 ## Install
 
