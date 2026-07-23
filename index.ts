@@ -32,7 +32,7 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Box, Key, Text, matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Review area definitions
@@ -479,6 +479,34 @@ export default function piReviewer(pi: ExtensionAPI) {
 	// Persistent configuration
 	let autoOffer = true;
 
+	// -------------------------------------------------------------------
+	// Entry renderers — display review results in the chat transcript
+	// without polluting LLM context (pi.appendEntry entries are NOT sent
+	// to the LLM, unlike pi.sendMessage).
+	// -------------------------------------------------------------------
+
+	pi.registerEntryRenderer<{ content: string; timestamp: number }>(
+		"pi-reviewer-report",
+		(entry, _opts, theme) => {
+			const data = entry.data ?? { content: "", timestamp: Date.now() };
+			const header = theme.fg("accent", theme.bold("📋 Code Review Report"));
+			return new Box(1, 1, (text) => theme.bg("customMessageBg", text))
+				.addChild(new Text(header, 0, 0))
+				.addChild(new Text(data.content, 0, 1));
+		},
+	);
+
+	pi.registerEntryRenderer<{ content: string; timestamp: number }>(
+		"pi-reviewer-fixes",
+		(entry, _opts, theme) => {
+			const data = entry.data ?? { content: "", timestamp: Date.now() };
+			const header = theme.fg("success", theme.bold("🔧 Fixes Applied"));
+			return new Box(1, 1, (text) => theme.bg("customMessageBg", text))
+				.addChild(new Text(header, 0, 0))
+				.addChild(new Text(data.content, 0, 1));
+		},
+	);
+
 	function persistState() {
 		pi.appendEntry<ReviewerState>(STATE_CUSTOM_TYPE, { autoOffer });
 	}
@@ -791,10 +819,13 @@ After applying fixes, output:
 		// Detect whether actionable issues were found
 		const hasIssues = reviewHasIssues(combined);
 
-		// Always show review results in editor to avoid polluting LLM
-		// conversation context. (Using pi.sendMessage would inject review
-		// content into the agent's context and confuse subsequent prompts.)
-		ctx.ui.setEditorText(combined);
+		// Show review results as a durable chat entry (visible to user,
+		// but NOT sent to the LLM — pi.appendEntry entries don't
+		// participate in LLM context).
+		pi.appendEntry<{ content: string; timestamp: number }>(
+			"pi-reviewer-report",
+			{ content: combined, timestamp: Date.now() },
+		);
 
 		if (hasIssues) {
 			const applyChoice = await ctx.ui.select(
@@ -804,16 +835,19 @@ After applying fixes, output:
 			if (applyChoice === "Apply fixes now") {
 				const fixResult = await applyFindings(combined, ctx);
 				if (fixResult) {
-					ctx.ui.setEditorText(fixResult);
+					pi.appendEntry<{ content: string; timestamp: number }>(
+						"pi-reviewer-fixes",
+						{ content: fixResult, timestamp: Date.now() },
+					);
 					ctx.ui.notify(
-						`✅ Review complete — ${results.length} area(s), fixes applied. Results in editor.`,
+						`✅ Review complete — ${results.length} area(s), fixes applied.`,
 						"info",
 					);
 					return;
 				}
 			} else {
 				ctx.ui.notify(
-					`Review complete — ${results.length} area(s), issues found but skipped. Results in editor.`,
+					`Review complete — ${results.length} area(s), issues found but skipped.`,
 					"info",
 				);
 				return;
@@ -821,7 +855,7 @@ After applying fixes, output:
 		}
 
 		ctx.ui.notify(
-			`✅ Review complete — ${results.length} area(s). Results in editor.`,
+			`✅ Review complete — ${results.length} area(s).`,
 			"info",
 		);
 	}

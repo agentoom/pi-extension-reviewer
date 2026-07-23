@@ -4,7 +4,7 @@ Post-task multi-area code review extension for [pi](https://pi.dev) by [agentoom
 
 After every task, pi-reviewer prompts you to run a structured critique across 7 specialised areas — or you can call `/review` anytime.
 
-> **v1.2.0** — Review scope now defaults to the **last prompt only** (not the entire session), and results are displayed in the editor to avoid confusing subsequent agent prompts.
+> **v1.2.1** — Review results and fixes now render directly in the chat transcript (via `pi.appendEntry` entry renderers) so you can read them inline, yet they stay invisible to the LLM on subsequent prompts. Review scope defaults to the **last prompt only**.
 
 ## Install
 
@@ -32,14 +32,14 @@ Before each review, you're asked to choose the scope:
 
 ### Apply Review Findings
 
-After the review completes, pi-reviewer scans the results for actionable issues (sections marked with ❌ or ⚠️ containing bullet points). Results are loaded into the editor panel (not injected into the conversation) to avoid confusing the agent on subsequent prompts.
+After the review completes, the results appear directly in the chat transcript as a styled **📋 Code Review Report** entry. These entries are rendered in the TUI but do **not** participate in LLM context — subsequent prompts won't see or be confused by them.
 
-If issues are found, you'll be prompted:
+pi-reviewer scans the results for actionable issues (sections marked with ❌ or ⚠️ containing bullet points). If issues are found, you'll be prompted:
 
-- **Apply fixes now** — the LLM reads the review findings, edits the affected files, and reports what was changed. Fix results are also shown in the editor.
-- **Skip** — the review results stay in the editor but no fixes are applied.
+- **Apply fixes now** — the LLM reads the review findings, edits the affected files, and reports what was changed. Fix results appear as a **🔧 Fixes Applied** entry in the chat.
+- **Skip** — the review report stays visible but no fixes are applied.
 
-If the review found no issues, the prompt is skipped and results are placed in the editor.
+If the review found no issues, the prompt is skipped.
 
 ### Auto‑offer
 
